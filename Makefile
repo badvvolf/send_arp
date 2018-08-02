@@ -1,9 +1,9 @@
 all : send_arp
 
-pcap_test: send_arp.o
+send_arp: send_arp.o
 	g++ -g -o send_arp send_arp.o -lpcap
 
-main.o:
+send_arp.o:
 	g++ -g -c -o send_arp.o send_arp.cpp
 
 clean:
