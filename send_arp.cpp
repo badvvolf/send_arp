@@ -96,7 +96,7 @@ int main(int argc, char * argv[])
 
     //--- get victim's MAC ---
     
-    //-------------------------------------------------------내 IP로 수정
+   
     MakeARP(ARPOP_REQUEST,buf, NULL, myMAC, victimIP, myIP);
    
     
